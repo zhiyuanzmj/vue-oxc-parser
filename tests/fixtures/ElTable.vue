@@ -2,6 +2,8 @@
   setup
   lang="tsx"
   generic="T extends string"
+  :foo.attr="foo"
+  :foo:name.attr="foo"
   v-model="model"
   v-model:model.number="model"
   v-model.number="model.value"

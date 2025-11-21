@@ -1,0 +1,7 @@
+---
+source: tests/parser_test.rs
+expression: result.code
+---
+<script setup lang="tsx" generic="T extends string" foo_attr={foo} foo:name_attr={foo} bar.prop="bar" v-model={model} v-model:model_number={model} v-model_number={model.value} v-on:click={a + 1} v-slot:default={{ foo }} unimplemented={bar}>{() => {
+	let foo = "";
+}}</script>;
