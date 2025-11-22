@@ -3,14 +3,18 @@ name = "vue-oxc-parser"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 oxc_allocator = "0.98.0"
-oxc_ast = "0.98.0"
+oxc_ast = { version = "0.98.0", features = ["serialize"] }
 oxc_codegen = "0.98.0"
 oxc_parser = "0.98.0"
 oxc_ast_visit = "0.98.0"
 oxc_span = "0.98.0"
 vue-compiler-core = "0.1.0"
+wasm-bindgen = "0.2.105"
 
 [dev-dependencies]
 insta = "1.44.0"

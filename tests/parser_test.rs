@@ -10,8 +10,8 @@ fn parser_test() {
   path.push("tests/fixtures/ElTable.vue");
   let source = fs::read_to_string(path).unwrap();
   let allocator = Allocator::new();
-  let mut vue_to_jsx = VueOxcParser::new(&allocator, &source);
-  let program = vue_to_jsx.parser();
+  let mut vue_oxc_parser = VueOxcParser::new(&allocator, &source);
+  let program = vue_oxc_parser.parse();
   let result = oxc_codegen::Codegen::new().build(&program);
   assert_snapshot!(result.code);
 }

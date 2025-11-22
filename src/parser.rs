@@ -45,7 +45,7 @@ impl<'a> VueOxcParser<'a> {
     }
   }
 
-  pub fn parser(&'a mut self) -> Program<'a> {
+  pub fn parse(&'a mut self) -> Program<'a> {
     let parser = Parser::new(ParseOption {
       whitespace: WhitespaceStrategy::Preserve,
       ..Default::default()
@@ -72,10 +72,13 @@ impl<'a> VueOxcParser<'a> {
 
           if node.tag_name == "script" {
             let script_block = if let Some(child) = node.children.get(0) {
-              let source = child.get_location().span().source_text(&self.source_text);
+              let span = child.get_location().span();
+              let source = span.source_text(&self.source_text);
               oxc_parser::Parser::new(
                 self.allocator,
-                source,
+                ast
+                  .atom(&format!("{}{source}", " ".repeat(span.start as usize)))
+                  .as_str(),
                 SourceType::from_extension(lang).unwrap(),
               )
               .parse()
@@ -183,7 +186,7 @@ impl<'a> VueOxcParser<'a> {
 
     let open_element_span = {
       let start = node.location.start.offset;
-      let end = if let Some(prop) = node.properties.get(0) {
+      let end = if let Some(prop) = node.properties.last() {
         self.offset(match prop {
           ElemProp::Attr(prop) => prop.location.end.offset,
           ElemProp::Dir(prop) => prop.location.end.offset,
@@ -240,86 +243,93 @@ impl<'a> VueOxcParser<'a> {
   fn parse_attribute(&self, prop: ElemProp<'a>) -> JSXAttributeItem<'a> {
     let ast = self.ast;
     match prop {
-      ElemProp::Attr(attr) => ast.jsx_attribute_item_attribute(
-        attr.name_loc.span(),
-        ast.jsx_attribute_name_identifier(attr.name_loc.span(), ast.atom(attr.name)),
-        if let Some(value) = attr.value {
-          Some(ast.jsx_attribute_value_string_literal(
-            value.location.span(),
-            ast.atom(&value.content.raw),
-            None,
-          ))
-        } else {
-          None
-        },
-      ),
-      ElemProp::Dir(dir) => ast.jsx_attribute_item_attribute(
-        dir.head_loc.span(),
-        match dir.name {
-          "bind" => ast.jsx_attribute_name_identifier(
-            dir.head_loc.span(),
-            self.parse_argument(dir.argument.unwrap(), dir.modifiers),
-          ),
-          _ => {
-            if let Some(argument) = &dir.argument {
-              let namespace_start = dir.location.start.offset as u32;
-              let namespace_end = namespace_start + 2 + dir.name.len() as u32;
-              match argument {
-                DirectiveArg::Static(arg) => ast.jsx_attribute_name_namespaced_name(
-                  dir.head_loc.span(),
-                  ast.jsx_identifier(
-                    Span::new(namespace_start, namespace_end),
-                    ast.atom(&format!("v-{}", dir.name)),
-                  ),
-                  ast.jsx_identifier(
-                    Span::new(namespace_end + 1, namespace_end + 1 + arg.len() as u32),
-                    self.parse_argument(dir.argument.unwrap(), dir.modifiers),
-                  ),
-                ),
-                DirectiveArg::Dynamic(arg) => {
-                  unimplemented!()
-                }
-              }
-            } else {
-              ast.jsx_attribute_name_identifier(
-                dir.head_loc.span(),
-                self.ast.atom(&format!(
-                  "v-{}{}",
-                  dir.name,
-                  self.parse_modifiers(dir.modifiers)
-                )),
-              )
-            }
-          }
-        },
-        if let Some(expr) = dir.expression {
-          let source_text = ast
-            .atom(&format!(
-              "{}({})",
-              " ".repeat(expr.location.start.offset - 1),
-              &expr.content.raw
+      ElemProp::Attr(attr) => {
+        let attr_end = self.roffset(attr.location.end.offset) as u32;
+        let attr_span = Span::new(attr.location.start.offset as u32, attr_end);
+        ast.jsx_attribute_item_attribute(
+          attr_span,
+          ast.jsx_attribute_name_identifier(attr.name_loc.span(), ast.atom(attr.name)),
+          if let Some(value) = attr.value {
+            Some(ast.jsx_attribute_value_string_literal(
+              Span::new(value.location.span().start as u32 + 1, attr_end - 1),
+              ast.atom(&value.content.raw),
+              None,
             ))
-            .as_str();
-          let mut program = oxc_parser::Parser::new(self.allocator, source_text, self.source_type)
-            .parse()
-            .program;
-          let Some(Statement::ExpressionStatement(stmt)) = program.body.get_mut(0) else {
-            panic!("parse expression error")
-          };
-          let Expression::ParenthesizedExpression(expression) = &mut stmt.expression else {
-            unreachable!()
-          };
-          let mut expression = expression.expression.take_in(self.allocator);
-          if dir.name == "slot" || dir.name == "for" {
-            DefaultValueToAssignment::new(source_text, self).visit_expression(&mut expression);
-          }
-          Some(
-            ast.jsx_attribute_value_expression_container(expr.location.span(), expression.into()),
-          )
-        } else {
-          None
-        },
-      ),
+          } else {
+            None
+          },
+        )
+      }
+      ElemProp::Dir(dir) => {
+        let dir_start = dir.location.start.offset as u32 + if dir.name == "bind" { 1 } else { 0 };
+        let dir_end = self.roffset(dir.location.end.offset) as u32;
+        ast.jsx_attribute_item_attribute(
+          Span::new(dir_start, dir_end),
+          match dir.name {
+            "bind" => ast.jsx_attribute_name_identifier(
+              Span::new(dir_start, dir.head_loc.end.offset as u32),
+              self.parse_argument(dir.argument.unwrap(), dir.modifiers),
+            ),
+            _ => {
+              if let Some(argument) = &dir.argument {
+                let namespace_end = dir_start + 2 + dir.name.len() as u32;
+                match argument {
+                  DirectiveArg::Static(arg) => ast.jsx_attribute_name_namespaced_name(
+                    dir.head_loc.span(),
+                    ast.jsx_identifier(
+                      Span::new(dir_start, namespace_end),
+                      ast.atom(&format!("v-{}", dir.name)),
+                    ),
+                    ast.jsx_identifier(
+                      Span::new(namespace_end + 1, namespace_end + 1 + arg.len() as u32),
+                      self.parse_argument(dir.argument.unwrap(), dir.modifiers),
+                    ),
+                  ),
+                  DirectiveArg::Dynamic(arg) => {
+                    unimplemented!()
+                  }
+                }
+              } else {
+                ast.jsx_attribute_name_identifier(
+                  dir.head_loc.span(),
+                  self.ast.atom(&format!(
+                    "v-{}{}",
+                    dir.name,
+                    self.parse_modifiers(dir.modifiers)
+                  )),
+                )
+              }
+            }
+          },
+          if let Some(expr) = dir.expression {
+            let span = Span::new(expr.location.start.offset as u32 + 1, dir_end - 1);
+            let source_text = ast
+              .atom(&format!(
+                "{}({})",
+                " ".repeat(expr.location.start.offset),
+                &expr.content.raw
+              ))
+              .as_str();
+            let mut program =
+              oxc_parser::Parser::new(self.allocator, source_text, self.source_type)
+                .parse()
+                .program;
+            let Some(Statement::ExpressionStatement(stmt)) = program.body.get_mut(0) else {
+              panic!("parse expression error")
+            };
+            let Expression::ParenthesizedExpression(expression) = &mut stmt.expression else {
+              unreachable!()
+            };
+            let mut expression = expression.expression.take_in(self.allocator);
+            if dir.name == "slot" || dir.name == "for" {
+              DefaultValueToAssignment::new(source_text, self).visit_expression(&mut expression);
+            }
+            Some(ast.jsx_attribute_value_expression_container(span, expression.into()))
+          } else {
+            None
+          },
+        )
+      }
     }
   }
 
