@@ -1,12 +1,16 @@
-use oxc_allocator::{self, Allocator};
+use oxc_allocator::{self, Allocator, TakeIn};
 use oxc_ast::ast::{
-  Expression, FormalParameterKind, JSXAttributeItem, JSXChild, JSXExpression, Program,
+  AssignmentTarget, Expression, FormalParameterKind, JSXAttributeItem, JSXChild, JSXExpression,
+  Program, Statement,
 };
 use oxc_ast::{AstBuilder, NONE};
-use oxc_span::{Atom, SPAN, SourceType, Span};
+use oxc_ast_visit::VisitMut;
+use oxc_span::{Atom, GetSpan, SPAN, SourceType, Span};
 use vue_compiler_core::SourceLocation;
 use vue_compiler_core::error::ErrorHandler;
-use vue_compiler_core::parser::{AstNode, DirectiveArg, ElemProp, Element, Parser};
+use vue_compiler_core::parser::{
+  AstNode, DirectiveArg, ElemProp, Element, ParseOption, Parser, TextNode, WhitespaceStrategy,
+};
 use vue_compiler_core::scanner::{ScanOption, Scanner};
 use vue_compiler_core::util::find_prop;
 
@@ -42,13 +46,16 @@ impl<'a> VueOxcParser<'a> {
   }
 
   pub fn parser(&'a mut self) -> Program<'a> {
-    let parser = Parser::new(Default::default());
+    let parser = Parser::new(ParseOption {
+      whitespace: WhitespaceStrategy::Preserve,
+      ..Default::default()
+    });
     let scanner = Scanner::new(ScanOption::default());
     let tokens = scanner.scan(self.source_text, NoopErrorHandler);
     let result = parser.parse(tokens, NoopErrorHandler);
 
     let ast = &self.ast;
-    let mut statements = ast.vec();
+    let mut children = ast.vec();
     for child in result.children {
       match child {
         AstNode::Element(node) => {
@@ -64,7 +71,7 @@ impl<'a> VueOxcParser<'a> {
           }
 
           if node.tag_name == "script" {
-            let children = if let Some(child) = node.children.get(0) {
+            let script_block = if let Some(child) = node.children.get(0) {
               let source = child.get_location().span().source_text(&self.source_text);
               oxc_parser::Parser::new(
                 self.allocator,
@@ -77,35 +84,31 @@ impl<'a> VueOxcParser<'a> {
             } else {
               ast.vec()
             };
-            statements.push(ast.statement_expression(
-              node.location.span(),
-              self.parse_jsx_element(
-                node,
-                ast.vec1(ast.jsx_child_expression_container(
+            children.push(self.parse_element(
+              node,
+              Some(ast.vec1(ast.jsx_child_expression_container(
+                SPAN,
+                JSXExpression::ArrowFunctionExpression(ast.alloc_arrow_function_expression(
                   SPAN,
-                  JSXExpression::ArrowFunctionExpression(ast.alloc_arrow_function_expression(
+                  false,
+                  false,
+                  NONE,
+                  ast.formal_parameters(
                     SPAN,
-                    false,
-                    false,
+                    FormalParameterKind::ArrowFormalParameters,
+                    ast.vec(),
                     NONE,
-                    ast.formal_parameters(
-                      SPAN,
-                      FormalParameterKind::ArrowFormalParameters,
-                      ast.vec(),
-                      NONE,
-                    ),
-                    NONE,
-                    ast.function_body(SPAN, ast.vec(), children),
-                  )),
+                  ),
+                  NONE,
+                  ast.function_body(SPAN, ast.vec(), script_block),
                 )),
-              ),
+              ))),
             ));
           } else if node.tag_name == "template" {
-            for node in node.children {
-              if let AstNode::Element(node) = &node {}
-            }
+            children.push(self.parse_element(node, None))
           }
         }
+        AstNode::Text(text) => children.push(self.parse_text(text)),
         _ => (),
       }
     }
@@ -116,68 +119,95 @@ impl<'a> VueOxcParser<'a> {
       ast.vec(),
       None,
       ast.vec(),
-      statements,
+      ast.vec1(ast.statement_expression(
+        SPAN,
+        ast.expression_jsx_fragment(
+          SPAN,
+          ast.jsx_opening_fragment(SPAN),
+          children,
+          ast.jsx_closing_fragment(SPAN),
+        ),
+      )),
     )
   }
 
-  fn element_span(&self, node: &Element) -> (Span, Span) {
-    let start = node.location.start.offset;
-    if let Some(child) = node.children.get(0) {
-      (
-        Span::new(start as u32, child.get_location().start.offset as u32),
-        Span::new(
-          node.children.last().unwrap().get_location().end.offset as u32,
-          node.location.end.offset as u32,
-        ),
-      )
-    } else {
-      let index = if let Some(prop) = node.properties.get(0) {
+  fn parse_children(
+    &self,
+    start: u32,
+    end: u32,
+    children: Vec<AstNode<'a>>,
+  ) -> oxc_allocator::Vec<'a, JSXChild<'a>> {
+    let ast = self.ast;
+    if children.is_empty() {
+      return ast.vec();
+    }
+    let mut result = self.ast.vec_with_capacity(children.len() + 2);
+
+    if let AstNode::Element(first) = &children[0]
+      && start != first.location.start.offset as u32
+    {
+      let span = Span::new(start, first.location.start.offset as u32);
+      let value = span.source_text(self.source_text);
+      result.push(ast.jsx_child_text(span, value, Some(ast.atom(value))))
+    }
+
+    result.extend(children.into_iter().filter_map(|child| match child {
+      AstNode::Element(node) => Some(self.parse_element(node, None)),
+      AstNode::Text(text) => Some(self.parse_text(text)),
+      _ => None,
+    }));
+
+    if let JSXChild::Element(last) = &result.last().unwrap()
+      && end != last.span.end
+    {
+      let span = Span::new(last.span.end, end);
+      let value = span.source_text(self.source_text);
+      result.push(ast.jsx_child_text(span, value, Some(ast.atom(value))))
+    }
+
+    result
+  }
+
+  fn parse_text(&self, text: TextNode<'a>) -> JSXChild<'a> {
+    let ast = self.ast;
+    let raw = ast.atom(text.text[0].raw);
+    ast.jsx_child_text(text.location.span(), raw, Some(raw))
+  }
+
+  fn parse_element(
+    &self,
+    node: Element<'a>,
+    children: Option<oxc_allocator::Vec<'a, JSXChild<'a>>>,
+  ) -> JSXChild<'a> {
+    let ast = self.ast;
+
+    let open_element_span = {
+      let start = node.location.start.offset;
+      let end = if let Some(prop) = node.properties.get(0) {
         self.offset(match prop {
           ElemProp::Attr(prop) => prop.location.end.offset,
           ElemProp::Dir(prop) => prop.location.end.offset,
         })
       } else {
-        self.offset(start) + node.tag_name.len()
-      } as u32
-        + 1;
-      (Span::new(index, index), Span::new(index, index))
-    }
-  }
+        start + 1 + node.tag_name.len()
+      } + 1;
+      Span::new(start as u32, end as u32)
+    };
 
-  fn offset(&self, start: usize) -> usize {
-    start
-      + self.source_text[start..]
-        .chars()
-        .take_while(|c| c.is_whitespace())
-        .count()
-  }
+    let end_element_span = {
+      let end = node.location.end.offset;
+      let start = (self.roffset(end) - node.tag_name.len() - 3) as u32;
+      Span::new(start as u32, end as u32)
+    };
 
-  fn roffset(&self, end: usize) -> usize {
-    end
-      - self.source_text[..end]
-        .chars()
-        .rev()
-        .take_while(|c| c.is_whitespace())
-        .count()
-  }
-
-  fn parse_jsx_element(
-    &self,
-    node: Element<'a>,
-    children: oxc_allocator::Vec<'a, JSXChild<'a>>,
-  ) -> Expression<'a> {
-    let ast = self.ast;
-    let (open_span, close_span) = self.element_span(&node);
-    let tag_name_start = self.offset(node.location.start.offset + 1);
-    let end_tag_name_end = self.roffset(node.location.end.offset - 1);
-    ast.expression_jsx_element(
+    ast.jsx_child_element(
       node.location.span(),
       ast.jsx_opening_element(
-        open_span,
+        open_element_span,
         ast.jsx_element_name_identifier(
           Span::new(
-            tag_name_start as u32,
-            (tag_name_start + node.tag_name.len()) as u32,
+            open_element_span.start + 1,
+            open_element_span.start + 1 + node.tag_name.len() as u32,
           ),
           ast.atom(node.tag_name),
         ),
@@ -186,16 +216,20 @@ impl<'a> VueOxcParser<'a> {
           node
             .properties
             .into_iter()
-            .map(|prop| self.parse_jsx_attribute(prop)),
+            .map(|prop| self.parse_attribute(prop)),
         ),
       ),
-      children,
+      if let Some(children) = children {
+        children
+      } else {
+        self.parse_children(open_element_span.end, end_element_span.start, node.children)
+      },
       Some(ast.jsx_closing_element(
-        close_span,
+        end_element_span,
         ast.jsx_element_name_identifier(
           Span::new(
-            (end_tag_name_end - node.tag_name.len()) as u32,
-            end_tag_name_end as u32,
+            end_element_span.start + 2,
+            end_element_span.start + 2 + node.tag_name.len() as u32,
           ),
           ast.atom(&node.tag_name),
         ),
@@ -203,7 +237,7 @@ impl<'a> VueOxcParser<'a> {
     )
   }
 
-  fn parse_jsx_attribute(&self, prop: ElemProp<'a>) -> JSXAttributeItem<'a> {
+  fn parse_attribute(&self, prop: ElemProp<'a>) -> JSXAttributeItem<'a> {
     let ast = self.ast;
     match prop {
       ElemProp::Attr(attr) => ast.jsx_attribute_item_attribute(
@@ -259,14 +293,28 @@ impl<'a> VueOxcParser<'a> {
           }
         },
         if let Some(expr) = dir.expression {
+          let source_text = ast
+            .atom(&format!(
+              "{}({})",
+              " ".repeat(expr.location.start.offset - 1),
+              &expr.content.raw
+            ))
+            .as_str();
+          let mut program = oxc_parser::Parser::new(self.allocator, source_text, self.source_type)
+            .parse()
+            .program;
+          let Some(Statement::ExpressionStatement(stmt)) = program.body.get_mut(0) else {
+            panic!("parse expression error")
+          };
+          let Expression::ParenthesizedExpression(expression) = &mut stmt.expression else {
+            unreachable!()
+          };
+          let mut expression = expression.expression.take_in(self.allocator);
+          if dir.name == "slot" || dir.name == "for" {
+            DefaultValueToAssignment::new(source_text, self).visit_expression(&mut expression);
+          }
           Some(
-            ast.jsx_attribute_value_expression_container(
-              expr.location.span(),
-              oxc_parser::Parser::new(self.allocator, &expr.content.raw, self.source_type)
-                .parse_expression()
-                .unwrap()
-                .into(),
-            ),
+            ast.jsx_attribute_value_expression_container(expr.location.span(), expression.into()),
           )
         } else {
           None
@@ -292,6 +340,60 @@ impl<'a> VueOxcParser<'a> {
       format!("_{}", modifiers.join("_"))
     } else {
       String::new()
+    }
+  }
+
+  fn offset(&self, start: usize) -> usize {
+    start
+      + self.source_text[start..]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .count()
+  }
+
+  fn roffset(&self, end: usize) -> usize {
+    end
+      - self.source_text[..end]
+        .chars()
+        .rev()
+        .take_while(|c| c.is_whitespace())
+        .count()
+  }
+}
+
+struct DefaultValueToAssignment<'a, 'ctx> {
+  source_text: &'a str,
+  context: &'ctx VueOxcParser<'a>,
+}
+impl<'a, 'ctx> DefaultValueToAssignment<'a, 'ctx> {
+  pub fn new(source_text: &'a str, context: &'ctx VueOxcParser<'a>) -> Self {
+    Self {
+      source_text,
+      context,
+    }
+  }
+}
+impl<'a, 'ctx> VisitMut<'a> for DefaultValueToAssignment<'a, 'ctx> {
+  fn visit_object_property(&mut self, it: &mut oxc_ast::ast::ObjectProperty<'a>) {
+    if it.value.span().end != it.span.end {
+      let ast = &self.context.ast;
+      let value_start = it.value.span().start as usize;
+      let source = &self.source_text[value_start..it.span.end as usize];
+      let mut expression = oxc_parser::Parser::new(
+        ast.allocator,
+        ast
+          .atom(&format!("{}{}", " ".repeat(it.span.start as usize), source))
+          .as_str(),
+        self.context.source_type,
+      )
+      .parse_expression()
+      .unwrap();
+      if let Expression::AssignmentExpression(expr) = &mut expression {
+        if let AssignmentTarget::AssignmentTargetIdentifier(id) = &mut expr.left {
+          id.span = SPAN;
+        }
+        it.value = expression.take_in(ast.allocator);
+      }
     }
   }
 }

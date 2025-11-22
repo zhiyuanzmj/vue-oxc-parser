@@ -4,22 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-criterion = "0.7.0"
-html5ever = "0.36.1"
-html_parser = "0.7.0"
-markup5ever_rcdom = "0.36.0"
 oxc_allocator = "0.98.0"
 oxc_ast = "0.98.0"
 oxc_codegen = "0.98.0"
 oxc_parser = "0.98.0"
+oxc_ast_visit = "0.98.0"
 oxc_span = "0.98.0"
-serde = {version = "1.0.228", features = ["derive"]}
-serde_json = "1.0.145"
 vue-compiler-core = "0.1.0"
+
+[dev-dependencies]
+insta = "1.44.0"
+criterion = "0.7.0"
 
 [[bench]]
 name = "parser_bench"
 harness = false
-
-[dev-dependencies]
-insta = "1.44.0"

@@ -8,13 +8,22 @@
   v-model:model.number="model"
   v-model.number="model.value"
   @click="a + 1"
-  #default="{ foo }"
+  #default = "{ foo = '' }"
+  #name = "{ foo }"
+  v-for="{ foo = '' } in list"
   :[foo.value]="bar"
 >
 let foo = "";
 </script>
 
+
 <template>
+  <div>
+    foo
+  </div>
+</template>
+
+<!--<template>
   <div
     :class="[
       {
@@ -270,4 +279,4 @@ let foo = "";
       class="el-table__column-resize-proxy"
     ></div>
   </div>
-</template>
+</template>-->
