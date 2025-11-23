@@ -17,6 +17,8 @@ use vue_compiler_core::parser::{
 use vue_compiler_core::scanner::{ScanOption, Scanner};
 use vue_compiler_core::util::find_prop;
 
+use crate::utils::is_simple_identifier;
+
 pub struct NoopErrorHandler;
 impl ErrorHandler for NoopErrorHandler {
   fn on_error(&self, _: vue_compiler_core::error::CompilationError) {}
@@ -462,6 +464,13 @@ impl<'a> VueOxcParser<'a> {
 
   pub fn parse_expression(&self, source: &'a str, start: usize) -> Expression<'a> {
     let ast = &self.ast;
+    if is_simple_identifier(source) {
+      return ast.expression_identifier(
+        Span::new(start as u32 + 1, (start + source.len() + 1) as u32),
+        source,
+      );
+    }
+
     let source_text = ast
       .atom(&format!("{}({})", " ".repeat(start), &source))
       .as_str();

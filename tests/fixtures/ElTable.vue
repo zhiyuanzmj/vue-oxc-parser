@@ -5,9 +5,9 @@
   :foo.attr="foo"
   :foo:name.attr="foo"
   :[foo.value].number="bar"
-  v-bind={obj}
-  v-bind:foo.number={foo}
-  v-bind:[foo.value].number={foo}
+  v-bind="obj"
+  v-bind:foo.number="foo"
+  v-bind:[foo.value].number="foo"
   @click="()=>{}"
   v-model="model"
   v-model:model.number="model"

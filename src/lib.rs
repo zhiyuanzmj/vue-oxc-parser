@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use oxc_allocator::Allocator;
 use oxc_codegen::CodegenOptions;
 use wasm_bindgen::prelude::wasm_bindgen;
+pub mod utils;
 
 use crate::parser::VueOxcParser;
 
