@@ -13,4 +13,4 @@ expression: result.code
   </div>
 </template>
 
-</>;
+{}</>;

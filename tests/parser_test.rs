@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use insta::assert_snapshot;
 use oxc_allocator::Allocator;
+use oxc_codegen::{CodegenOptions, CommentOptions};
 use vue_oxc_parser::parser::VueOxcParser;
 
 #[test]
@@ -12,6 +13,12 @@ fn parser_test() {
   let allocator = Allocator::new();
   let mut vue_oxc_parser = VueOxcParser::new(&allocator, &source);
   let program = vue_oxc_parser.parse();
-  let result = oxc_codegen::Codegen::new().build(&program);
+  let result = oxc_codegen::Codegen::new()
+    .with_options(CodegenOptions {
+      comments: CommentOptions::default(),
+      ..Default::default()
+    })
+    .build(&program);
+  dbg!(result.legal_comments);
   assert_snapshot!(result.code);
 }

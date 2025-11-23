@@ -1,15 +1,18 @@
+use std::cell::RefCell;
+
 use oxc_allocator::{self, Allocator, TakeIn};
 use oxc_ast::ast::{
   AssignmentTarget, Expression, FormalParameterKind, JSXAttributeItem, JSXChild, JSXExpression,
   Program, Statement,
 };
-use oxc_ast::{AstBuilder, NONE};
+use oxc_ast::{AstBuilder, Comment, CommentKind, NONE};
 use oxc_ast_visit::VisitMut;
 use oxc_span::{Atom, GetSpan, SPAN, SourceType, Span};
 use vue_compiler_core::SourceLocation;
 use vue_compiler_core::error::ErrorHandler;
 use vue_compiler_core::parser::{
-  AstNode, DirectiveArg, ElemProp, Element, ParseOption, Parser, TextNode, WhitespaceStrategy,
+  AstNode, DirectiveArg, ElemProp, Element, ParseOption, Parser, SourceNode, TextNode,
+  WhitespaceStrategy,
 };
 use vue_compiler_core::scanner::{ScanOption, Scanner};
 use vue_compiler_core::util::find_prop;
@@ -34,14 +37,17 @@ pub struct VueOxcParser<'a> {
   source_text: &'a str,
   ast: AstBuilder<'a>,
   source_type: SourceType,
+  comments: RefCell<oxc_allocator::Vec<'a, Comment>>,
 }
 impl<'a> VueOxcParser<'a> {
   pub fn new(allocator: &'a Allocator, source_text: &'a str) -> Self {
+    let ast = AstBuilder::new(allocator);
     Self {
       allocator,
       source_text,
       source_type: SourceType::jsx(),
-      ast: AstBuilder::new(allocator),
+      ast,
+      comments: RefCell::from(ast.vec()),
     }
   }
 
@@ -112,6 +118,7 @@ impl<'a> VueOxcParser<'a> {
           }
         }
         AstNode::Text(text) => children.push(self.parse_text(text)),
+        AstNode::Comment(comment) => children.push(self.parse_comment(comment)),
         _ => (),
       }
     }
@@ -119,7 +126,7 @@ impl<'a> VueOxcParser<'a> {
       SPAN,
       self.source_type,
       self.source_text,
-      ast.vec(),
+      self.comments.borrow_mut().take_in(ast.allocator),
       None,
       ast.vec(),
       ast.vec1(ast.statement_expression(
@@ -157,6 +164,7 @@ impl<'a> VueOxcParser<'a> {
     result.extend(children.into_iter().filter_map(|child| match child {
       AstNode::Element(node) => Some(self.parse_element(node, None)),
       AstNode::Text(text) => Some(self.parse_text(text)),
+      AstNode::Comment(comment) => Some(self.parse_comment(comment)),
       _ => None,
     }));
 
@@ -169,12 +177,6 @@ impl<'a> VueOxcParser<'a> {
     }
 
     result
-  }
-
-  fn parse_text(&self, text: TextNode<'a>) -> JSXChild<'a> {
-    let ast = self.ast;
-    let raw = ast.atom(text.text[0].raw);
-    ast.jsx_child_text(text.location.span(), raw, Some(raw))
   }
 
   fn parse_element(
@@ -351,6 +353,26 @@ impl<'a> VueOxcParser<'a> {
     } else {
       String::new()
     }
+  }
+
+  fn parse_text(&self, text: TextNode<'a>) -> JSXChild<'a> {
+    let ast = self.ast;
+    let raw = ast.atom(text.text[0].raw);
+    ast.jsx_child_text(text.location.span(), raw, Some(raw))
+  }
+
+  fn parse_comment(&self, comment: SourceNode<'a>) -> JSXChild<'a> {
+    let ast = self.ast;
+    let span = comment.location.span();
+    self.comments.borrow_mut().push(Comment::new(
+      span.start + 1,
+      span.end - 1,
+      CommentKind::Block,
+    ));
+    ast.jsx_child_expression_container(
+      span,
+      ast.jsx_expression_empty_expression(Span::new(span.start + 1, span.end - 1)),
+    )
   }
 
   fn offset(&self, start: usize) -> usize {
