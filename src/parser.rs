@@ -2,8 +2,8 @@ use std::cell::RefCell;
 
 use oxc_allocator::{self, Allocator, TakeIn};
 use oxc_ast::ast::{
-  Argument, AssignmentTarget, Expression, FormalParameterKind, JSXAttributeItem, JSXChild,
-  JSXExpression, Program, PropertyKey, PropertyKind, Statement,
+  AssignmentTarget, Expression, FormalParameterKind, JSXAttributeItem, JSXChild, JSXExpression,
+  Program, PropertyKind, Statement,
 };
 use oxc_ast::{AstBuilder, Comment, CommentKind, NONE};
 use oxc_ast_visit::VisitMut;
