@@ -40,6 +40,7 @@ pub struct VueOxcParser<'a> {
   ast: AstBuilder<'a>,
   source_type: SourceType,
   comments: RefCell<oxc_allocator::Vec<'a, Comment>>,
+  empty_str: String,
 }
 impl<'a> VueOxcParser<'a> {
   pub fn new(allocator: &'a Allocator, source_text: &'a str) -> Self {
@@ -50,6 +51,7 @@ impl<'a> VueOxcParser<'a> {
       source_type: SourceType::jsx(),
       ast,
       comments: RefCell::from(ast.vec()),
+      empty_str: ".".repeat(source_text.len()),
     }
   }
 
@@ -85,7 +87,10 @@ impl<'a> VueOxcParser<'a> {
               oxc_parser::Parser::new(
                 self.allocator,
                 ast
-                  .atom(&format!("{}{source}", " ".repeat(span.start as usize)))
+                  .atom(&format!(
+                    "/*{}*/{source}",
+                    &self.empty_str[..span.start as usize - 4]
+                  ))
                   .as_str(),
                 SourceType::from_extension(lang).unwrap(),
               )
@@ -472,7 +477,12 @@ impl<'a> VueOxcParser<'a> {
     }
 
     let source_text = ast
-      .atom(&format!("{}({})", " ".repeat(start), &source))
+      .atom(&format!(
+        "/*{}*/({})",
+        // Using comments instead of whitespace to improve performance.
+        &self.empty_str[..start - 4],
+        &source
+      ))
       .as_str();
     let mut program = oxc_parser::Parser::new(self.allocator, source_text, self.source_type)
       .parse()
@@ -521,7 +531,11 @@ impl<'a, 'ctx> VisitMut<'a> for DefaultValueToAssignment<'a, 'ctx> {
       let mut expression = oxc_parser::Parser::new(
         ast.allocator,
         ast
-          .atom(&format!("{}{}", " ".repeat(it.span.start as usize), source))
+          .atom(&format!(
+            "/*{}*/{}",
+            &self.context.empty_str[..it.span.start as usize - 4],
+            source
+          ))
           .as_str(),
         self.context.source_type,
       )
