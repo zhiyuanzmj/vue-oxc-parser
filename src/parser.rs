@@ -207,14 +207,19 @@ impl<'a> VueOxcParser<'a> {
       Span::new(start as u32, end as u32)
     };
 
+    let location_span = node.location.span();
     let end_element_span = {
-      let end = node.location.end.offset;
-      let start = (self.roffset(end) - node.tag_name.len() - 3) as u32;
-      Span::new(start as u32, end as u32)
+      if location_span.source_text(self.source_text).ends_with("/>") {
+        node.location.span()
+      } else {
+        let end = node.location.end.offset;
+        let start = (self.roffset(end) - node.tag_name.len() - 3) as u32;
+        Span::new(start as u32, end as u32)
+      }
     };
 
     ast.jsx_child_element(
-      node.location.span(),
+      location_span,
       ast.jsx_opening_element(
         open_element_span,
         ast.jsx_element_name_identifier(
@@ -237,16 +242,20 @@ impl<'a> VueOxcParser<'a> {
       } else {
         self.parse_children(open_element_span.end, end_element_span.start, node.children)
       },
-      Some(ast.jsx_closing_element(
-        end_element_span,
-        ast.jsx_element_name_identifier(
-          Span::new(
-            end_element_span.start + 2,
-            end_element_span.start + 2 + node.tag_name.len() as u32,
+      if end_element_span.eq(&location_span) {
+        None
+      } else {
+        Some(ast.jsx_closing_element(
+          end_element_span,
+          ast.jsx_element_name_identifier(
+            Span::new(
+              end_element_span.start + 2,
+              end_element_span.start + 2 + node.tag_name.len() as u32,
+            ),
+            ast.atom(&node.tag_name),
           ),
-          ast.atom(&node.tag_name),
-        ),
-      )),
+        ))
+      },
     )
   }
 

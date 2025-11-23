@@ -27,9 +27,12 @@ let foo = "";
   <div>
     {{ bar }}
   </div>
+  <Comp />
 </template>
 
-<!--<template>
+<!-- comment -->
+
+<template>
   <div
     :class="[
       {
@@ -285,4 +288,4 @@ let foo = "";
       class="el-table__column-resize-proxy"
     ></div>
   </div>
-</template>-->
+</template>
