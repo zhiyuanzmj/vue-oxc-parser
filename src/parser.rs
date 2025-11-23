@@ -2,8 +2,8 @@ use std::cell::RefCell;
 
 use oxc_allocator::{self, Allocator, TakeIn};
 use oxc_ast::ast::{
-  AssignmentTarget, Expression, FormalParameterKind, JSXAttributeItem, JSXChild, JSXExpression,
-  Program, Statement,
+  Argument, AssignmentTarget, Expression, FormalParameterKind, JSXAttributeItem, JSXChild,
+  JSXExpression, Program, PropertyKey, PropertyKind, Statement,
 };
 use oxc_ast::{AstBuilder, Comment, CommentKind, NONE};
 use oxc_ast_visit::VisitMut;
@@ -271,18 +271,54 @@ impl<'a> VueOxcParser<'a> {
         )
       }
       ElemProp::Dir(dir) => {
-        let dir_start = dir.location.start.offset as u32 + if dir.name == "bind" { 1 } else { 0 };
+        let dir_start = dir.location.start.offset as u32;
         let dir_end = self.roffset(dir.location.end.offset) as u32;
+        let head_name = dir.head_loc.span().source_text(self.source_text);
         ast.jsx_attribute_item_attribute(
           Span::new(dir_start, dir_end),
           match dir.name {
-            "bind" => ast.jsx_attribute_name_identifier(
-              Span::new(dir_start, dir.head_loc.end.offset as u32),
-              self.parse_argument(dir.argument.unwrap(), dir.modifiers),
-            ),
+            "bind" => {
+              if let Some(argument) = &dir.argument {
+                if let DirectiveArg::Dynamic(_) = argument {
+                  // :[foo]="bar"
+                  ast.jsx_attribute_name_identifier(
+                    Span::new(dir_start, dir_start + 1),
+                    ast.atom(&format!("v-bind{}", self.parse_modifiers(dir.modifiers))),
+                  )
+                } else {
+                  if head_name.starts_with(":") {
+                    // :foo="bar"
+                    ast.jsx_attribute_name_identifier(
+                      Span::new(dir_start + 1, dir.head_loc.end.offset as u32),
+                      self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers),
+                    )
+                  } else {
+                    // v-bind:foo="bar"
+                    ast.jsx_attribute_name_namespaced_name(
+                      dir.head_loc.span(),
+                      ast.jsx_identifier(Span::new(dir_start, dir_start + 6), ast.atom("v-bind")),
+                      ast.jsx_identifier(
+                        Span::new(dir_start + 7, dir.head_loc.end.offset as u32),
+                        self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers),
+                      ),
+                    )
+                  }
+                }
+              } else {
+                // v-bind="obj"
+                ast.jsx_attribute_name_identifier(
+                  dir.head_loc.span(),
+                  ast.atom(&format!("v-bind{}", self.parse_modifiers(dir.modifiers))),
+                )
+              }
+            }
             _ => {
               if let Some(argument) = &dir.argument {
-                let namespace_end = dir_start + 2 + dir.name.len() as u32;
+                let namespace_end = if head_name.starts_with("v-") {
+                  dir_start + 2 + dir.name.len() as u32
+                } else {
+                  dir_start + 1
+                };
                 match argument {
                   DirectiveArg::Static(arg) => ast.jsx_attribute_name_namespaced_name(
                     dir.head_loc.span(),
@@ -291,13 +327,22 @@ impl<'a> VueOxcParser<'a> {
                       ast.atom(&format!("v-{}", dir.name)),
                     ),
                     ast.jsx_identifier(
-                      Span::new(namespace_end + 1, namespace_end + 1 + arg.len() as u32),
-                      self.parse_argument(dir.argument.unwrap(), dir.modifiers),
+                      if head_name.starts_with("v-") {
+                        Span::new(namespace_end + 1, namespace_end + 1 + arg.len() as u32)
+                      } else {
+                        Span::new(namespace_end, namespace_end + arg.len() as u32)
+                      },
+                      self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers),
                     ),
                   ),
-                  DirectiveArg::Dynamic(arg) => {
-                    unimplemented!()
-                  }
+                  DirectiveArg::Dynamic(_) => ast.jsx_attribute_name_identifier(
+                    Span::new(dir_start, dir_start + 1),
+                    ast.atom(&format!(
+                      "v-{}{}",
+                      dir.name,
+                      self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers)
+                    )),
+                  ),
                 }
               } else {
                 ast.jsx_attribute_name_identifier(
@@ -315,9 +360,36 @@ impl<'a> VueOxcParser<'a> {
             let span = Span::new(expr.location.start.offset as u32 + 1, dir_end - 1);
             let mut expression =
               self.parse_expression(expr.content.raw, expr.location.start.offset);
+
             if dir.name == "slot" || dir.name == "for" {
               DefaultValueToAssignment::new(self).visit_expression(&mut expression);
             }
+
+            if let Some(argument) = &dir.argument
+              && let DirectiveArg::Dynamic(argument_str) = argument
+            {
+              let dynamic_arg_expression = self.parse_expression(
+                argument_str,
+                if head_name.starts_with("v-") {
+                  dir_start as usize + 2 + dir.name.len() + 1
+                } else {
+                  dir_start as usize + 1
+                },
+              );
+              expression = ast.expression_object(
+                SPAN,
+                ast.vec1(ast.object_property_kind_object_property(
+                  SPAN,
+                  PropertyKind::Init,
+                  dynamic_arg_expression.into(),
+                  expression,
+                  false,
+                  false,
+                  true,
+                )),
+              )
+            }
+
             Some(ast.jsx_attribute_value_expression_container(span, expression.into()))
           } else {
             None
@@ -327,14 +399,12 @@ impl<'a> VueOxcParser<'a> {
     }
   }
 
-  fn parse_argument(&self, argument: DirectiveArg, modifiers: Vec<&'a str>) -> Atom<'a> {
+  fn parse_argument(&self, argument: &DirectiveArg, modifiers: Vec<&'a str>) -> Atom<'a> {
     self.ast.atom(&format!(
       "{}{}",
       match argument {
         DirectiveArg::Static(arg) => arg,
-        DirectiveArg::Dynamic(arg) => {
-          "unimplemented"
-        }
+        DirectiveArg::Dynamic(_) => "",
       },
       self.parse_modifiers(modifiers)
     ))

@@ -4,14 +4,20 @@
   generic="T extends string"
   :foo.attr="foo"
   :foo:name.attr="foo"
+  :[foo.value].number="bar"
+  v-bind={obj}
+  v-bind:foo.number={foo}
+  v-bind:[foo.value].number={foo}
+  @click="()=>{}"
   v-model="model"
   v-model:model.number="model"
   v-model.number="model.value"
+  v-model:[foo].number="foo"
   @click="a + 1"
   #default = "{ foo = '' }"
   #name = "{ foo }"
+  v-slot:name="{foo}"
   v-for="{ foo = '' } in list"
-  :[foo.value]="bar"
 >
 let foo = "";
 </script>
