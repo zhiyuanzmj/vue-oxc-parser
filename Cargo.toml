@@ -3,6 +3,13 @@ name = "vue-oxc-parser"
 version = "0.1.0"
 edition = "2024"
 
+authors = ["zhiyuanzmj <260480378@qq.com>"]
+description = "Covert Vue AST (vue-compiler-core) to JSX AST (oxc)"
+repository = "https://github.com/zhiyuanzmj/vue-oxc-parser"
+keywords = ["vue", "oxc-parser"]
+categories = ["compilers", "development-tools", "web-programming"]
+license = "MIT"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
