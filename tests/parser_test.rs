@@ -19,6 +19,5 @@ fn parser_test() {
       ..Default::default()
     })
     .build(&program);
-  dbg!(result.legal_comments);
   assert_snapshot!(result.code);
 }

@@ -19,7 +19,7 @@ let foo = "";
 
 <template>
   <div>
-    foo
+    {{ bar }}
   </div>
 </template>
 

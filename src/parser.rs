@@ -119,7 +119,7 @@ impl<'a> VueOxcParser<'a> {
         }
         AstNode::Text(text) => children.push(self.parse_text(text)),
         AstNode::Comment(comment) => children.push(self.parse_comment(comment)),
-        _ => (),
+        AstNode::Interpolation(interp) => children.push(self.parse_interpolation(interp)),
       }
     }
     ast.program(
@@ -153,27 +153,35 @@ impl<'a> VueOxcParser<'a> {
     }
     let mut result = self.ast.vec_with_capacity(children.len() + 2);
 
-    if let AstNode::Element(first) = &children[0]
-      && start != first.location.start.offset as u32
+    if let Some(first) = children.get(0)
+      && matches!(first, AstNode::Element(_) | AstNode::Interpolation(_))
+      && start != first.get_location().start.offset as u32
     {
-      let span = Span::new(start, first.location.start.offset as u32);
+      let span = Span::new(start, first.get_location().start.offset as u32);
       let value = span.source_text(self.source_text);
       result.push(ast.jsx_child_text(span, value, Some(ast.atom(value))))
     }
+
+    let last = if let Some(last) = children.last()
+      && matches!(last, AstNode::Element(_) | AstNode::Interpolation(_))
+      && end != last.get_location().end.offset as u32
+    {
+      let span = Span::new(last.get_location().end.offset as u32, end);
+      let value = span.source_text(self.source_text);
+      Some(ast.jsx_child_text(span, value, Some(ast.atom(value))))
+    } else {
+      None
+    };
 
     result.extend(children.into_iter().filter_map(|child| match child {
       AstNode::Element(node) => Some(self.parse_element(node, None)),
       AstNode::Text(text) => Some(self.parse_text(text)),
       AstNode::Comment(comment) => Some(self.parse_comment(comment)),
-      _ => None,
+      AstNode::Interpolation(interp) => Some(self.parse_interpolation(interp)),
     }));
 
-    if let JSXChild::Element(last) = &result.last().unwrap()
-      && end != last.span.end
-    {
-      let span = Span::new(last.span.end, end);
-      let value = span.source_text(self.source_text);
-      result.push(ast.jsx_child_text(span, value, Some(ast.atom(value))))
+    if let Some(last) = last {
+      result.push(last)
     }
 
     result
@@ -305,26 +313,10 @@ impl<'a> VueOxcParser<'a> {
           },
           if let Some(expr) = dir.expression {
             let span = Span::new(expr.location.start.offset as u32 + 1, dir_end - 1);
-            let source_text = ast
-              .atom(&format!(
-                "{}({})",
-                " ".repeat(expr.location.start.offset),
-                &expr.content.raw
-              ))
-              .as_str();
-            let mut program =
-              oxc_parser::Parser::new(self.allocator, source_text, self.source_type)
-                .parse()
-                .program;
-            let Some(Statement::ExpressionStatement(stmt)) = program.body.get_mut(0) else {
-              panic!("parse expression error")
-            };
-            let Expression::ParenthesizedExpression(expression) = &mut stmt.expression else {
-              unreachable!()
-            };
-            let mut expression = expression.expression.take_in(self.allocator);
+            let mut expression =
+              self.parse_expression(expr.content.raw, expr.location.start.offset);
             if dir.name == "slot" || dir.name == "for" {
-              DefaultValueToAssignment::new(source_text, self).visit_expression(&mut expression);
+              DefaultValueToAssignment::new(self).visit_expression(&mut expression);
             }
             Some(ast.jsx_attribute_value_expression_container(span, expression.into()))
           } else {
@@ -375,6 +367,37 @@ impl<'a> VueOxcParser<'a> {
     )
   }
 
+  fn parse_interpolation(&self, introp: SourceNode<'a>) -> JSXChild<'a> {
+    let ast = self.ast;
+    let span = Span::new(
+      introp.location.start.offset as u32 + 1,
+      introp.location.end.offset as u32 - 1,
+    );
+    ast.jsx_child_expression_container(
+      span,
+      self
+        .parse_expression(introp.source, span.start as usize)
+        .into(),
+    )
+  }
+
+  pub fn parse_expression(&self, source: &'a str, start: usize) -> Expression<'a> {
+    let ast = &self.ast;
+    let source_text = ast
+      .atom(&format!("{}({})", " ".repeat(start), &source))
+      .as_str();
+    let mut program = oxc_parser::Parser::new(self.allocator, source_text, self.source_type)
+      .parse()
+      .program;
+    let Some(Statement::ExpressionStatement(stmt)) = program.body.get_mut(0) else {
+      panic!("parse expression error")
+    };
+    let Expression::ParenthesizedExpression(expression) = &mut stmt.expression else {
+      unreachable!()
+    };
+    expression.expression.take_in(self.allocator)
+  }
+
   fn offset(&self, start: usize) -> usize {
     start
       + self.source_text[start..]
@@ -394,15 +417,11 @@ impl<'a> VueOxcParser<'a> {
 }
 
 struct DefaultValueToAssignment<'a, 'ctx> {
-  source_text: &'a str,
   context: &'ctx VueOxcParser<'a>,
 }
 impl<'a, 'ctx> DefaultValueToAssignment<'a, 'ctx> {
-  pub fn new(source_text: &'a str, context: &'ctx VueOxcParser<'a>) -> Self {
-    Self {
-      source_text,
-      context,
-    }
+  pub fn new(context: &'ctx VueOxcParser<'a>) -> Self {
+    Self { context }
   }
 }
 impl<'a, 'ctx> VisitMut<'a> for DefaultValueToAssignment<'a, 'ctx> {
@@ -410,7 +429,7 @@ impl<'a, 'ctx> VisitMut<'a> for DefaultValueToAssignment<'a, 'ctx> {
     if it.value.span().end != it.span.end {
       let ast = &self.context.ast;
       let value_start = it.value.span().start as usize;
-      let source = &self.source_text[value_start..it.span.end as usize];
+      let source = &self.context.source_text[value_start..it.span.end as usize];
       let mut expression = oxc_parser::Parser::new(
         ast.allocator,
         ast

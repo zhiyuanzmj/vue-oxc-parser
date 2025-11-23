@@ -9,7 +9,7 @@ expression: result.code
 
 <template>
   <div>
-    foo
+    {bar}
   </div>
 </template>
 
