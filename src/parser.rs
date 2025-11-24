@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::mem;
 
 use oxc_allocator::{self, Allocator, TakeIn};
 use oxc_ast::ast::{
@@ -11,7 +12,7 @@ use oxc_span::{Atom, GetSpan, SPAN, SourceType, Span};
 use vue_compiler_core::SourceLocation;
 use vue_compiler_core::error::ErrorHandler;
 use vue_compiler_core::parser::{
-  AstNode, DirectiveArg, ElemProp, Element, ParseOption, Parser, SourceNode, TextNode,
+  AstNode, Directive, DirectiveArg, ElemProp, Element, ParseOption, Parser, SourceNode, TextNode,
   WhitespaceStrategy,
 };
 use vue_compiler_core::scanner::{ScanOption, Scanner};
@@ -286,10 +287,11 @@ impl<'a> VueOxcParser<'a> {
           },
         )
       }
-      ElemProp::Dir(dir) => {
+      ElemProp::Dir(mut dir) => {
         let dir_start = dir.location.start.offset as u32;
         let dir_end = self.roffset(dir.location.end.offset) as u32;
         let head_name = dir.head_loc.span().source_text(self.source_text);
+        let modifiers = mem::take(&mut dir.modifiers);
         ast.jsx_attribute_item_attribute(
           Span::new(dir_start, dir_end),
           match dir.name {
@@ -299,14 +301,14 @@ impl<'a> VueOxcParser<'a> {
                   // :[foo]="bar"
                   ast.jsx_attribute_name_identifier(
                     Span::new(dir_start, dir_start + 1),
-                    ast.atom(&format!("v-bind{}", self.parse_modifiers(dir.modifiers))),
+                    ast.atom(&format!("v-bind{}", self.parse_modifiers(modifiers))),
                   )
                 } else {
                   if head_name.starts_with(":") {
                     // :foo="bar"
                     ast.jsx_attribute_name_identifier(
                       Span::new(dir_start + 1, dir.head_loc.end.offset as u32),
-                      self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers),
+                      self.parse_argument(dir.argument.as_ref().unwrap(), modifiers),
                     )
                   } else {
                     // v-bind:foo="bar"
@@ -315,7 +317,7 @@ impl<'a> VueOxcParser<'a> {
                       ast.jsx_identifier(Span::new(dir_start, dir_start + 6), ast.atom("v-bind")),
                       ast.jsx_identifier(
                         Span::new(dir_start + 7, dir.head_loc.end.offset as u32),
-                        self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers),
+                        self.parse_argument(dir.argument.as_ref().unwrap(), modifiers),
                       ),
                     )
                   }
@@ -324,7 +326,7 @@ impl<'a> VueOxcParser<'a> {
                 // v-bind="obj"
                 ast.jsx_attribute_name_identifier(
                   dir.head_loc.span(),
-                  ast.atom(&format!("v-bind{}", self.parse_modifiers(dir.modifiers))),
+                  ast.atom(&format!("v-bind{}", self.parse_modifiers(modifiers))),
                 )
               }
             }
@@ -348,7 +350,7 @@ impl<'a> VueOxcParser<'a> {
                       } else {
                         Span::new(namespace_end, namespace_end + arg.len() as u32)
                       },
-                      self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers),
+                      self.parse_argument(dir.argument.as_ref().unwrap(), modifiers),
                     ),
                   ),
                   DirectiveArg::Dynamic(_) => ast.jsx_attribute_name_identifier(
@@ -356,7 +358,7 @@ impl<'a> VueOxcParser<'a> {
                     ast.atom(&format!(
                       "v-{}{}",
                       dir.name,
-                      self.parse_argument(dir.argument.as_ref().unwrap(), dir.modifiers)
+                      self.parse_argument(dir.argument.as_ref().unwrap(), modifiers)
                     )),
                   ),
                 }
@@ -366,14 +368,13 @@ impl<'a> VueOxcParser<'a> {
                   self.ast.atom(&format!(
                     "v-{}{}",
                     dir.name,
-                    self.parse_modifiers(dir.modifiers)
+                    self.parse_modifiers(modifiers)
                   )),
                 )
               }
             }
           },
-          if let Some(expr) = dir.expression {
-            let span = Span::new(expr.location.start.offset as u32 + 1, dir_end - 1);
+          if let Some(expr) = &dir.expression {
             let mut expression =
               self.parse_expression(expr.content.raw, expr.location.start.offset);
 
@@ -381,37 +382,63 @@ impl<'a> VueOxcParser<'a> {
               DefaultValueToAssignment::new(self).visit_expression(&mut expression);
             }
 
-            if let Some(argument) = &dir.argument
-              && let DirectiveArg::Dynamic(argument_str) = argument
-            {
-              let dynamic_arg_expression = self.parse_expression(
-                argument_str,
-                if head_name.starts_with("v-") {
-                  dir_start as usize + 2 + dir.name.len() + 1
-                } else {
-                  dir_start as usize + 1
-                },
-              );
-              expression = ast.expression_object(
+            Some(ast.jsx_attribute_value_expression_container(
+              Span::new(expr.location.start.offset as u32 + 1, dir_end - 1),
+              self.parse_dynamic_argument(&dir, expression).into(),
+            ))
+          } else if let Some(argument) = &dir.argument
+            && let DirectiveArg::Dynamic(_) = argument
+          {
+            // v-slot:[name]
+            Some(
+              ast.jsx_attribute_value_expression_container(
                 SPAN,
-                ast.vec1(ast.object_property_kind_object_property(
-                  SPAN,
-                  PropertyKind::Init,
-                  dynamic_arg_expression.into(),
-                  expression,
-                  false,
-                  false,
-                  true,
-                )),
-              )
-            }
-
-            Some(ast.jsx_attribute_value_expression_container(span, expression.into()))
+                self
+                  .parse_dynamic_argument(&dir, ast.expression_identifier(SPAN, "undefined"))
+                  .into(),
+              ),
+            )
           } else {
             None
           },
         )
       }
+    }
+  }
+
+  fn parse_dynamic_argument(
+    &self,
+    dir: &Directive<'a>,
+    expression: Expression<'a>,
+  ) -> Expression<'a> {
+    let ast = &self.ast;
+    let head_name = dir.head_loc.span().source_text(self.source_text);
+    let dir_start = dir.location.start.offset;
+    if let Some(argument) = &dir.argument
+      && let DirectiveArg::Dynamic(argument_str) = argument
+    {
+      let dynamic_arg_expression = self.parse_expression(
+        argument_str,
+        if head_name.starts_with("v-") {
+          dir_start as usize + 2 + dir.name.len() + 1
+        } else {
+          dir_start as usize + 1
+        },
+      );
+      ast.expression_object(
+        SPAN,
+        ast.vec1(ast.object_property_kind_object_property(
+          SPAN,
+          PropertyKind::Init,
+          dynamic_arg_expression.into(),
+          expression,
+          false,
+          false,
+          true,
+        )),
+      )
+    } else {
+      expression
     }
   }
 

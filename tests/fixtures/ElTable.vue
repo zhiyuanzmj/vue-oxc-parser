@@ -27,7 +27,7 @@ let foo = "";
   <div>
     {{ bar }}
   </div>
-  <Comp />
+  <Comp v-slot:[name] />
 </template>
 
 <!-- comment -->

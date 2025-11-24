@@ -11,7 +11,7 @@ expression: result.code
   <div>
     {bar}
   </div>
-  <Comp />
+  <Comp v-slot={{ [name]: undefined }} />
 </template>
 
 {}
