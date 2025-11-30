@@ -11,8 +11,7 @@ fn parser_test() {
   path.push("tests/fixtures/ElTable.vue");
   let source = fs::read_to_string(path).unwrap();
   let allocator = Allocator::new();
-  let mut vue_oxc_parser = VueOxcParser::new(&allocator, &source);
-  let program = vue_oxc_parser.parse();
+  let program = VueOxcParser::new(&allocator, &source).parse().program;
   let result = oxc_codegen::Codegen::new()
     .with_options(CodegenOptions {
       comments: CommentOptions::default(),

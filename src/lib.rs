@@ -22,8 +22,7 @@ pub struct ParseResult {
 #[wasm_bindgen]
 pub fn parse(source_text: String, filename: String) -> ParseResult {
   let allocator = Allocator::new();
-  let mut vue_oxc_parser = VueOxcParser::new(&allocator, &source_text);
-  let program = vue_oxc_parser.parse();
+  let program = VueOxcParser::new(&allocator, &source_text).parse().program;
   let result = oxc_codegen::Codegen::new()
     .with_options(CodegenOptions {
       source_map_path: Some(PathBuf::from(&filename)),

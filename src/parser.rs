@@ -8,6 +8,7 @@ use oxc_ast::ast::{
 };
 use oxc_ast::{AstBuilder, Comment, CommentKind, NONE};
 use oxc_ast_visit::VisitMut;
+use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{Atom, GetSpan, SPAN, SourceType, Span};
 use vue_compiler_core::SourceLocation;
 use vue_compiler_core::error::ErrorHandler;
@@ -20,9 +21,17 @@ use vue_compiler_core::util::find_prop;
 
 use crate::utils::is_simple_identifier;
 
-pub struct NoopErrorHandler;
-impl ErrorHandler for NoopErrorHandler {
-  fn on_error(&self, _: vue_compiler_core::error::CompilationError) {}
+pub struct OxcErrorHandler<'a> {
+  errors: &'a RefCell<Vec<OxcDiagnostic>>,
+}
+
+impl<'a> ErrorHandler for OxcErrorHandler<'a> {
+  fn on_error(&self, error: vue_compiler_core::error::CompilationError) {
+    self
+      .errors
+      .borrow_mut()
+      .push(OxcDiagnostic::error(error.to_string()))
+  }
 }
 
 pub trait SourceLocatonSpan {
@@ -35,6 +44,11 @@ impl SourceLocatonSpan for SourceLocation {
   }
 }
 
+pub struct ParserReturn<'a> {
+  pub program: Program<'a>,
+  pub errors: Vec<OxcDiagnostic>,
+}
+
 pub struct VueOxcParser<'a> {
   allocator: &'a Allocator,
   source_text: &'a str,
@@ -43,6 +57,7 @@ pub struct VueOxcParser<'a> {
   comments: RefCell<oxc_allocator::Vec<'a, Comment>>,
   empty_str: String,
 }
+
 impl<'a> VueOxcParser<'a> {
   pub fn new(allocator: &'a Allocator, source_text: &'a str) -> Self {
     let ast = AstBuilder::new(allocator);
@@ -56,14 +71,15 @@ impl<'a> VueOxcParser<'a> {
     }
   }
 
-  pub fn parse(&'a mut self) -> Program<'a> {
+  pub fn parse(mut self) -> ParserReturn<'a> {
     let parser = Parser::new(ParseOption {
       whitespace: WhitespaceStrategy::Preserve,
       ..Default::default()
     });
+    let errors = RefCell::new(vec![]);
     let scanner = Scanner::new(ScanOption::default());
-    let tokens = scanner.scan(self.source_text, NoopErrorHandler);
-    let result = parser.parse(tokens, NoopErrorHandler);
+    let tokens = scanner.scan(self.source_text, OxcErrorHandler { errors: &errors });
+    let result = parser.parse(tokens, OxcErrorHandler { errors: &errors });
 
     let ast = &self.ast;
     let mut children = ast.vec();
@@ -130,7 +146,8 @@ impl<'a> VueOxcParser<'a> {
         AstNode::Interpolation(interp) => children.push(self.parse_interpolation(interp)),
       }
     }
-    ast.program(
+
+    let program = ast.program(
       SPAN,
       self.source_type,
       self.source_text,
@@ -146,7 +163,11 @@ impl<'a> VueOxcParser<'a> {
           ast.jsx_closing_fragment(SPAN),
         ),
       )),
-    )
+    );
+    ParserReturn {
+      program,
+      errors: errors.take(),
+    }
   }
 
   fn parse_children(
