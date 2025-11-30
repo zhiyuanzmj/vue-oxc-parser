@@ -20,3 +20,39 @@ fn parser_test() {
     .build(&program);
   assert_snapshot!(result.code);
 }
+
+#[test]
+fn parser_semantic_test() {
+  let allocator = Allocator::new();
+  let program = VueOxcParser::new(
+    &allocator,
+    r#"<template>
+      <Comp v-slot:name="{ foo }">{{ foo }}</Comp>
+      <Comp v-slot:[name(foo)]="{ foo }">{{ foo }}</Comp>
+
+      <Comp>
+        <template #default="{foo}">{{ foo }}</template>
+        <template #name="{bar}">{{ bar }}</template>
+      </Comp>
+
+      <Comp v-for="name in list">
+        {{ name }}
+      </Comp>
+
+      <Comp>
+        <template #[name]="scope" v-for="(name, Slot) in slots">
+          <Slot v-bind={scope} />
+        </template>
+      </Comp>
+    </template>"#,
+  )
+  .parse_for_semantic()
+  .program;
+  let result = oxc_codegen::Codegen::new()
+    .with_options(CodegenOptions {
+      comments: CommentOptions::default(),
+      ..Default::default()
+    })
+    .build(&program);
+  assert_snapshot!(result.code);
+}

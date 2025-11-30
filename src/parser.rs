@@ -50,10 +50,10 @@ pub struct ParserReturn<'a> {
 }
 
 pub struct VueOxcParser<'a> {
-  allocator: &'a Allocator,
-  source_text: &'a str,
-  ast: AstBuilder<'a>,
-  source_type: SourceType,
+  pub allocator: &'a Allocator,
+  pub source_text: &'a str,
+  pub ast: AstBuilder<'a>,
+  pub source_type: SourceType,
   comments: RefCell<oxc_allocator::Vec<'a, Comment>>,
   empty_str: String,
 }
@@ -396,8 +396,13 @@ impl<'a> VueOxcParser<'a> {
             }
           },
           if let Some(expr) = &dir.expression {
-            let mut expression =
-              self.parse_expression(expr.content.raw, expr.location.start.offset);
+            // v-for="item of list" => v-for="item in list"
+            let raw = if dir.name == "for" {
+              ast.atom(&expr.content.raw.replace(" of ", "in")).as_str()
+            } else {
+              expr.content.raw
+            };
+            let mut expression = self.parse_expression(raw, expr.location.start.offset);
 
             if dir.name == "slot" || dir.name == "for" {
               DefaultValueToAssignment::new(self).visit_expression(&mut expression);

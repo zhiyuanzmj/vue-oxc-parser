@@ -1,0 +1,23 @@
+---
+source: tests/parser_test.rs
+expression: result.code
+---
+<><template>
+      <Comp v-slot:name={}>{{ name: ({ foo }) => <>{foo}</> }}</Comp>
+      <Comp v-slot={}>{{ [name(foo)]: ({ foo }) => <>{foo}</> }}</Comp>
+
+      <Comp>
+        <template v-slot:default={}>{{ default: ({ foo }) => <>{foo}</> }}</template>
+        <template v-slot:name={}>{{ name: ({ bar }) => <>{bar}</> }}</template>
+      </Comp>
+
+      <Comp v-for={null in list}>{(name) => <>
+        {name}
+      </>}</Comp>
+
+      <Comp>
+        <template v-slot={} v-for={null in slots}>{(name, Slot) => <>{{ [name]: (scope) => <>
+          <Slot v-bind={{ scope }} />
+        </> }}</>}</template>
+      </Comp>
+    </template></>;

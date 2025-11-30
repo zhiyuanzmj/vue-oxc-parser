@@ -7,10 +7,7 @@ use vue_compiler_core::{
   parser::{ParseOption, Parser, WhitespaceStrategy},
   scanner::{ScanOption, Scanner},
 };
-use vue_oxc_parser::{
-  parse,
-  parser::{NoopErrorHandler, VueOxcParser},
-};
+use vue_oxc_parser::{parse, parser::VueOxcParser};
 
 fn bench_compile(b: &mut Criterion) {
   let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -23,8 +20,7 @@ fn bench_compile(b: &mut Criterion) {
   group.bench_function("vue-oxc-parser", |b| {
     b.iter(|| {
       let allocator = Allocator::new();
-      let mut vue_oxc_parser = VueOxcParser::new(&allocator, &source_text);
-      vue_oxc_parser.parse();
+      VueOxcParser::new(&allocator, &source_text).parse();
     })
   });
 
